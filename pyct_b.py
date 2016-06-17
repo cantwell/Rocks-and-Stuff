@@ -35,7 +35,6 @@ Type the following into the console after running this script:
 1. from PIL import Image
 2. imgsrc = r'/home/jcrnk/Documents/SummerRP/core.tif' # This is your directory where the tif is located
 3. img = Image.open(imgsrc)
-4. tempf = r'/home/jcrnk/Documents/SummerRP/temp' # temporary folder directory
 4. c = CoreScan(img, dims=[0,100,0,50,0,75], temp_folder=tempf)
 5. c.triangulate()
 6. c.plot_pores(subgraph='mst')
@@ -46,6 +45,7 @@ CHANGES:
 2. Moved over to PIL to handle images
 3. Tiff files with multiple frames now easier to display
 4. Fixed problem where mst's void maps and mags were switched
+5. Fixed temp folders not being created if a temp folder didn't exist
 """
 import numpy as np
 import time
@@ -529,13 +529,17 @@ class CoreScan:
                                 self._elbl_name,
                                 self._blnk_name]
 
-            
+
+        # create a temp_folder if one doesn't exist
         if temp_folder == None:
-            self.temp_folder = os.path.abspath(os.path.join(fid, os.pardir))
+            if os.path.isdir(os.path.join(os.getcwd(), "\Temp")) == False:
+                os.mkdir(os.path.join(os.getcwd(), "\Temp"))
+            self.temp_folder = os.path.join(os.getcwd(), "\Temp")
+            print("Folder: ", self.temp_folder)
         else:
             if os.path.isdir(temp_folder) == False:
                 os.mkdir(temp_folder)
-            self.temp_folder = temp_folder
+            self.temp_folder = temp_folder 
 
         '''  If the fid value is not a string, it might be a...'''
         if fid.__class__ != str:
