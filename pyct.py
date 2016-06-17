@@ -434,7 +434,7 @@ class CoreScan:
 
     """
 
-    def __init__(self, 
+def __init__(self, 
                  fid, 
                  dims = [None,None,None,None,None,None], 
                  verbose=False,
@@ -459,7 +459,8 @@ class CoreScan:
 
      
 
-        ''' This is a convenience function to grab the data from the file '''         
+        ''' This is a convenience function to grab the data from the file '''
+        print("Beginning init")         
         def gen_slice(fid, dims):
             y_0, y_1, x_0, x_1 = dims[2:]
             with open(fid) as f:
@@ -489,16 +490,17 @@ class CoreScan:
                                 self._elbl_name,
                                 self._blnk_name]
 
-            
-        if temp_folder == None:
-            self.temp_folder = os.path.abspath(os.path.join(fid, os.pardir))
-        else:
-            if os.path.isdir(temp_folder) == False:
-                os.mkdir(temp_folder)
-            self.temp_folder = temp_folder
-
         '''  If the fid value is not a string, it might be a...'''
         if fid.__class__ != str:
+            if temp_folder == None:
+                if os.path.isdir(os.path.join(os.getcwd(), "\Temp")) == False:
+                    os.mkdir(os.path.join(os.getcwd(), "\Temp"))
+                self.temp_folder = os.path.join(os.getcwd(), "\Temp")
+                print("Folder: ", self.temp_folder)
+            else:
+                if os.path.isdir(temp_folder) == False:
+                    os.mkdir(temp_folder)
+                self.temp_folder = temp_folder
                 
             ''' numpy array, or a... ''' 
             if fid.__class__ == np.array([0,0]).__class__:
@@ -532,7 +534,12 @@ class CoreScan:
             '''  If the fid value _is_ a string, we need to do some housekeeping...'''
 
         else:
-            
+            if temp_folder == None:
+                self.temp_folder = os.path.abs(os.path.join(fid, os.pardir))
+            else:
+                if os.path.isdir(temp_folder) == False:
+                    os.mkdir(temp_folder)
+                self.temp_folder = temp_folder
             ''' We need to remove pre-existing files if they are already there ''' 
             if os.path.isdir(fid) or os.path.isfile(fid):
                 rem_files_in_list(self.temp_folder, dat_file_names_list)
