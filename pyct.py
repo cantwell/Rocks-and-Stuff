@@ -29,6 +29,24 @@
     For more information contact carsonc@gmail.com
 
 """
+"""
+### EXAMPLE ON HOW TO RUN WITH A TIFF FILE ###
+Type the following into the console after running this script:
+1. from PIL import Image
+2. imgsrc = r'/home/jcrnk/Documents/SummerRP/core.tif' # This is your directory where the tif is located
+3. img = Image.open(imgsrc)
+4. c = CoreScan(img, dims=[0,100,0,50,0,75], temp_folder=tempf)
+5. c.triangulate()
+6. c.plot_pores(subgraph='mst')
+"""
+"""
+CHANGES:
+1. Fixed 2D slices not appearing in mayavi
+2. Moved over to PIL to handle images
+3. Tiff files with multiple frames now easier to display
+4. Fixed problem where mst's void maps and mags were switched
+5. Fixed temp folders not being created if a temp folder didn't exist
+"""
 import numpy as np
 import time
 import matplotlib.pyplot as plt
@@ -147,6 +165,28 @@ def gen_test_fcc(x_dim_o, y_dim_o, z_dim_o, d_spacing, r_void):
 
 ### Internal methods used in CoreScan object. They are presented externally 
 ### for ease of testing and troubleshooting.
+
+def _2d_to_3d(fid): # turns 2d numpy arrays into 3d numpy arrays
+    if len(fid.shape) == 2:
+        fid = fid.tolist()
+        fid = [fid]
+    return fid
+
+def _tiff_to_3d(img,start_frame,end_frame):
+    if (start_frame == None) | (start_frame < 0): 
+        start_frame = 0
+    if (end_frame == None) | (end_frame > img.n_frames):
+        end_frame = img.n_frames
+    img.seek(start_frame)    
+    slice_2d = np.asarray(img)
+    img_3d = _2d_to_3d(slice_2d)        
+    for frame in xrange(start_frame + 1, end_frame):
+        img.seek(frame)    
+        slice_2d = np.asarray(img)
+        slice_3d = _2d_to_3d(slice_2d)
+        img_3d = np.concatenate((img_3d, slice_3d), axis = 0)
+    return img_3d
+
 
 def _cdist_refinement(entry, dict_in):
 
@@ -434,12 +474,12 @@ class CoreScan:
 
     """
 
-def __init__(self, 
+    def __init__(self, 
                  fid, 
-                 dims = [None,None,None,None,None,None], 
+                 dims = [None,None,None,None,None,None],
                  verbose=False,
                  temp_folder = None,
-                 invert_array = False):
+                 invert_array = True):
         """Base object for CoreScan.
     
         Input:
@@ -459,8 +499,7 @@ def __init__(self,
 
      
 
-        ''' This is a convenience function to grab the data from the file '''
-        print("Beginning init")         
+        ''' This is a convenience function to grab the data from the file '''         
         def gen_slice(fid, dims):
             y_0, y_1, x_0, x_1 = dims[2:]
             with open(fid) as f:
@@ -490,20 +529,24 @@ def __init__(self,
                                 self._elbl_name,
                                 self._blnk_name]
 
+
+        # create a temp_folder if one doesn't exist
+        if temp_folder == None:
+            if os.path.isdir(os.path.join(os.getcwd(), "\Temp")) == False:
+                os.mkdir(os.path.join(os.getcwd(), "\Temp"))
+            self.temp_folder = os.path.join(os.getcwd(), "\Temp")
+            print("Folder: ", self.temp_folder)
+        else:
+            if os.path.isdir(temp_folder) == False:
+                os.mkdir(temp_folder)
+            self.temp_folder = temp_folder 
+
         '''  If the fid value is not a string, it might be a...'''
         if fid.__class__ != str:
-            if temp_folder == None:
-                if os.path.isdir(os.path.join(os.getcwd(), "\Temp")) == False:
-                    os.mkdir(os.path.join(os.getcwd(), "\Temp"))
-                self.temp_folder = os.path.join(os.getcwd(), "\Temp")
-                print("Folder: ", self.temp_folder)
-            else:
-                if os.path.isdir(temp_folder) == False:
-                    os.mkdir(temp_folder)
-                self.temp_folder = temp_folder
                 
             ''' numpy array, or a... ''' 
             if fid.__class__ == np.array([0,0]).__class__:
+                fid = _2d_to_3d(fid) 
                 self.core_data = np.asarray(fid, dtype=bool)[dims[0]: dims[1], 
                                                              dims[2]: dims[3],
                                                              dims[4]: dims[5]]
@@ -512,17 +555,23 @@ def __init__(self,
     
             ''' numpy memmap object. '''
             if str(fid.__class__) == "<class 'numpy.core.memmap.memmap'>":
+                fid = _2d_to_3d(fid) 
                 self.core_data = fid[dims[0]: dims[1], 
                                      dims[2]: dims[3],
                                      dims[4]: dims[5]]
                 if self.verbose:
                     print "Data loaded from : ", fid.__class__
                     
-            ''' tiffarray memmap object. '''
-            if str(fid.__class__) == 'libtiff.tiff_array.TiffArray':
-                self.core_data = fid[dims[0]: dims[1], 
-                                     dims[2]: dims[3],
-                                     dims[4]: dims[5]]
+            ''' tiff image. '''
+            if str(fid.__class__) == "<class 'PIL.TiffImagePlugin.TiffImageFile'>":
+                from PIL import Image
+                if fid.n_frames == 1: # 2d slice of a core
+                    fid = _2d_to_3d(np.asarray(fid)) 
+                else:
+                    fid = _tiff_to_3d(fid, dims[0], dims[1])
+                self.core_data = np.asarray(fid, dtype=bool)[None   : None, 
+                                                             dims[2]: dims[3],
+                                                             dims[4]: dims[5]]
                 if self.verbose:
                     print "Data loaded from : ", fid.__class__            
 
@@ -534,12 +583,7 @@ def __init__(self,
             '''  If the fid value _is_ a string, we need to do some housekeeping...'''
 
         else:
-            if temp_folder == None:
-                self.temp_folder = os.path.abs(os.path.join(fid, os.pardir))
-            else:
-                if os.path.isdir(temp_folder) == False:
-                    os.mkdir(temp_folder)
-                self.temp_folder = temp_folder
+            
             ''' We need to remove pre-existing files if they are already there ''' 
             if os.path.isdir(fid) or os.path.isfile(fid):
                 rem_files_in_list(self.temp_folder, dat_file_names_list)
@@ -709,7 +753,7 @@ def __init__(self,
     def triangulate(self,
                slice_index = None,
                dims = None,
-               plotfigs = False,
+               plotfigs = True,
                method = 'Delaunay',
                qhull_options = 'QJ',
                brute_force = False,
@@ -1109,12 +1153,12 @@ def __init__(self,
         rng_void_mags, rng_min_v_map = _calc_voids_chords(rng_point_list, e_label)
         void_mags, min_v_map = _calc_voids_chords(point_list, e_label)
         
-
         paste_list, paste_mags, label_list, point_list = _gen_lists_from_dict(mst_dict, recalc)
-        void_mags, min_v_map = _calc_voids_chords(point_list, e_label)
+        # void_mags, min_v_map = _calc_voids_chords(point_list, e_label)
             
-        _pastes = [fbt_paste_mags, rng_paste_mags, paste_mags]
-        _voids = [fbt_void_mags, rng_void_mags, void_mags]
+        _pastes = [fbt_paste_mags, rng_paste_mags, paste_mags] 
+        _voids = [fbt_void_mags, rng_void_mags, void_mags] 
+
         paste_void_pairs = zip(_pastes, _voids)
 
 
@@ -1304,10 +1348,10 @@ def __init__(self,
         self.paste_mags = paste_mags
         self.void_mags = void_mags
         self.paste_list = paste_list
-        self.min_v_map = void_mags
+        self.min_v_map = min_v_map
 
         self.mst_paste_mags = paste_mags
-        self.mst_void_mags = min_v_map
+        self.mst_void_mags = void_mags 
 
         self.rng_paste_mags = rng_paste_mags
         self.rng_void_mags = rng_void_mags
@@ -1361,9 +1405,9 @@ def __init__(self,
 
 
     def plot_pores(self, 
-                   paste=False, 
-                   voids=False, 
-                   subgraph=None, 
+                   paste = True, 
+                   voids = True, 
+                   subgraph = None, 
                    o_map = None):
 
         '''
@@ -1436,17 +1480,17 @@ def __init__(self,
         mlab.figure(bgcolor=(1,1,1)) # Set bkg color
         mlab.contour3d(o_map, 
                        color = (0,0,0),
-                       contours=2,
-                       opacity = .20 * 100 /self.shape[0]) # Draw pores
+                       contours = 2,
+                       opacity = .2 + .8/self.shape[0]) # Draw pores for 3d, changed froo .20 * 100 / self.shape[0]
         if paste:
             for vals in paste_data:
                 mlab.plot3d(*vals,
-                            tube_radius=0.25 * self.shape[0] / 100,
+                            tube_radius=0.1 + .05/self.shape[0],
                             color = (1, 0, 0)) # Draw paste lines
         if voids:
             for vals in voids_data:
                 mlab.plot3d(*vals,
-                            tube_radius=0.1,
+                            tube_radius=0.1 + .05/self.shape[0],
                             color = (0, 0, 1)) # Draw void lines
 
         a = anim() # Start the animation.    
