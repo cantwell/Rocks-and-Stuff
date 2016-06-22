@@ -437,7 +437,118 @@ def gen_cell_slice(x_dim_o, y_dim_o, d_spacing, r_void):
     
     return out_slice
     
+    ''' This is a convenience function to grab the data from the file '''         
+def gen_slice(fid, dims):
+    y_0, y_1, x_0, x_1 = dims[2:]
+    with open(fid) as f:
+        temp_slice = np.loadtxt(f, 
+                                delimiter='\t', 
+                                dtype = bool)[y_0: y_1, x_0: x_1]
+    return temp_slice
     
+    
+def read_fid(self, fid, dims):
+    dat_file_names_list = [ self._core_name,
+                           self._dlat_name,
+                           self._labl_name,
+                           self._vdge_name,
+                           self._skel_name,
+                           self._skel_labl,
+                           self._elbl_name,
+                           self._blnk_name]
+    '''  If the fid value is not a string, it might be a...'''
+    if fid.__class__ != str: 
+        ''' numpy array, or a... ''' 
+        if fid.__class__ == np.array([0,0]).__class__:
+            fid = _2d_to_3d(fid) 
+            self.core_data = np.asarray(fid, dtype=bool)[dims[0]: dims[1], 
+                                                         dims[2]: dims[3],
+                                                         dims[4]: dims[5]]
+
+        ''' numpy memmap object. '''
+        if str(fid.__class__) == "<class 'numpy.core.memmap.memmap'>":
+            fid = _2d_to_3d(fid) 
+            self.core_data = fid[dims[0]: dims[1], 
+                                 dims[2]: dims[3],
+                                 dims[4]: dims[5]]
+                    
+        ''' tiff image. '''
+        if str(fid.__class__) == "<class 'PIL.TiffImagePlugin.TiffImageFile'>":
+            if fid.n_frames == 1: # 2d slice of a core
+                fid = _2d_to_3d(np.asarray(fid)) 
+            else:
+                fid = _tiff_to_3d(fid, dims[0], dims[1])
+                self.core_data = np.asarray(fid, dtype=bool)[None   : None, 
+                                                             dims[2]: dims[3],
+                                                             dims[4]: dims[5]]
+        if self.verbose:
+            print "Data loaded from : ", fid.__class__            
+            fid = os.path.curdir                    
+        self.shape = self.core_data.shape
+        self.fileid = fid
+    else:
+        ''' We need to remove pre-existing files if they are already there ''' 
+        if os.path.isdir(fid) or os.path.isfile(fid):
+            rem_files_in_list(self.temp_folder, dat_file_names_list)
+        
+            ''' We will make memmap objects, which have predefined sizes. So,
+            memmap needs to know its size before it is created. We read the first
+            file to determine the array size, if we don't already know'''
+            if dims == [None,None,None,None,None,None]:
+                if os.path.isdir(fid):
+                    filelist = os.listdir(fid)
+                    temp_slice = np.loadtxt(os.path.join(fid,filelist[0]),
+                                            delimiter='\t')
+                if fid.endswith('.zip'):
+                    archive = zipfile.ZipFile(fid)                                                
+                    filelist = archive.namelist()
+                    imgdata = archive.open(filelist[0])
+                    temp_slice = np.loadtxt(imgdata, delimiter='\t')
+                    _y, _x = temp_slice.shape
+                    dims = [0, len(filelist), 0, _y, 0, _x] 
+        
+            self.shape = (dims[1] - dims[0],
+                          dims[3] - dims[2], 
+                          dims[5] - dims[4])        
+            if fid.__class__ == str and os.path.isdir(fid):
+                self.core_data = self._make_memmap(fid, self._core_name)
+                filelist = os.listdir(fid)
+                filelist.sort()
+                for idx, files in enumerate(filelist[dims[0]: dims[1]]):
+                    temp_slice = gen_slice(os.path.join(fid,files), dims)
+                    self.core_data[idx] = temp_slice
+                    self.core_data.flush()
+                    if idx%100 == 0:
+                        print 'Now loading slice : ', idx, ':', files
+                self.fileid = fid
+                if self.verbose:
+                    print "Data loaded from : ", fid
+                        
+                '''   a zip file, ''' 
+            if fid.__class__ == str and fid.endswith('.zip'):
+                self.core_data = self._make_memmap(fid, self._core_name)
+                archive = zipfile.ZipFile(fid)
+                filelist = archive.namelist()
+                filelist.sort()
+                for idx, files in enumerate(filelist[dims[0]: dims[1]]):
+                    imgdata = archive.open(filelist[idx])
+                    temp_slice = gen_slice(os.path.join(fid,files), dims)
+                    self.core_data[idx] = temp_slice
+                    self.core_data.flush()
+                self.fileid = fid
+                if self.verbose:
+                    print "Zipped data loaded from : ", fid
+        
+                '''   and a numpy file. ''' 
+            if fid.__class__ == str and fid.endswith('.npy'):
+                self.core_data = np.load(fid, mmap_mode='r')[dims[0]: dims[1], 
+                                                             dims[2]: dims[3],
+                                                             dims[4]: dims[5]]
+                self.core_data = np.array(self.core_data, dtype=bool)
+                self.fileid = fid
+                if self.verbose:
+                    print "Npy file loaded from : ", fid
+
 class CoreScan:
     """Base class for analyzing slices pores from cement or porous material.
 
@@ -473,7 +584,8 @@ class CoreScan:
                     read-write access
 
     """
-
+                        
+                        
     def __init__(self, 
                  fid, 
                  dims = [None,None,None,None,None,None],
@@ -496,17 +608,6 @@ class CoreScan:
             Array shape is   :  (200, 200)
             Mean porosity is :  0.0932
         """
-
-     
-
-        ''' This is a convenience function to grab the data from the file '''         
-        def gen_slice(fid, dims):
-            y_0, y_1, x_0, x_1 = dims[2:]
-            with open(fid) as f:
-                temp_slice = np.loadtxt(f, 
-                                        delimiter='\t', 
-                                        dtype = bool)[y_0: y_1, x_0: x_1]
-            return temp_slice
             
         ''' These filenames will be written in the parent dir of fid '''
             
@@ -520,15 +621,6 @@ class CoreScan:
         self._elbl_name = 'elabel.dat'
         self._blnk_name = 'blank.dat'
 
-        dat_file_names_list = [ self._core_name,
-                                self._dlat_name,
-                                self._labl_name,
-                                self._vdge_name,
-                                self._skel_name,
-                                self._skel_labl,
-                                self._elbl_name,
-                                self._blnk_name]
-
 
         # create a temp_folder if one doesn't exist
         if temp_folder == None:
@@ -540,121 +632,17 @@ class CoreScan:
             if os.path.isdir(temp_folder) == False:
                 os.mkdir(temp_folder)
             self.temp_folder = temp_folder 
-
-        '''  If the fid value is not a string, it might be a...'''
-        if fid.__class__ != str:
-                
-            ''' numpy array, or a... ''' 
-            if fid.__class__ == np.array([0,0]).__class__:
-                fid = _2d_to_3d(fid) 
-                self.core_data = np.asarray(fid, dtype=bool)[dims[0]: dims[1], 
-                                                             dims[2]: dims[3],
-                                                             dims[4]: dims[5]]
-                if self.verbose:
-                    print "Data loaded from : ", fid.__class__
-    
-            ''' numpy memmap object. '''
-            if str(fid.__class__) == "<class 'numpy.core.memmap.memmap'>":
-                fid = _2d_to_3d(fid) 
-                self.core_data = fid[dims[0]: dims[1], 
-                                     dims[2]: dims[3],
-                                     dims[4]: dims[5]]
-                if self.verbose:
-                    print "Data loaded from : ", fid.__class__
-                    
-            ''' tiff image. '''
-            if str(fid.__class__) == "<class 'PIL.TiffImagePlugin.TiffImageFile'>":
-                from PIL import Image
-                if fid.n_frames == 1: # 2d slice of a core
-                    fid = _2d_to_3d(np.asarray(fid)) 
-                else:
-                    fid = _tiff_to_3d(fid, dims[0], dims[1])
-                self.core_data = np.asarray(fid, dtype=bool)[None   : None, 
-                                                             dims[2]: dims[3],
-                                                             dims[4]: dims[5]]
-                if self.verbose:
-                    print "Data loaded from : ", fid.__class__            
-
-            fid = os.path.curdir                    
-            self.shape = self.core_data.shape
-            self.fileid = fid
-
-
-            '''  If the fid value _is_ a string, we need to do some housekeeping...'''
-
-        else:
             
-            ''' We need to remove pre-existing files if they are already there ''' 
-            if os.path.isdir(fid) or os.path.isfile(fid):
-                rem_files_in_list(self.temp_folder, dat_file_names_list)
-        
-                ''' We will make memmap objects, which have predefined sizes. So,
-                    memmap needs to know its size before it is created. We read the first
-                    file to determine the array size, if we don't already know'''
-                if dims == [None,None,None,None,None,None]:
-                    if os.path.isdir(fid):
-                        filelist = os.listdir(fid)
-                        temp_slice = np.loadtxt(os.path.join(fid,filelist[0]),
-                                                delimiter='\t')
-                    if fid.endswith('.zip'):
-                        archive = zipfile.ZipFile(fid)
-                        filelist = archive.namelist()
-                        imgdata = archive.open(filelist[0])
-                        temp_slice = np.loadtxt(imgdata, delimiter='\t')
-                    _y, _x = temp_slice.shape
-                    dims = [0, len(filelist), 0, _y, 0, _x] 
-        
-                self.shape = (dims[1] - dims[0],
-                              dims[3] - dims[2], 
-                              dims[5] - dims[4])        
-                
-                ''' These are some data entry methods for the string, including:
-                      a file path, '''      
-                if fid.__class__ == str and os.path.isdir(fid):
-                    self.core_data = self._make_memmap(fid, self._core_name)
-                    filelist = os.listdir(fid)
-                    filelist.sort()
-                    for idx, files in enumerate(filelist[dims[0]: dims[1]]):
-                        temp_slice = gen_slice(os.path.join(fid,files), dims)
-                        self.core_data[idx] = temp_slice
-                        self.core_data.flush()
-                        if idx%100 == 0:
-                            print 'Now loading slice : ', idx, ':', files
-                    self.fileid = fid
-                    if self.verbose:
-                        print "Data loaded from : ", fid
-                        
-                '''   a zip file, ''' 
-                if fid.__class__ == str and fid.endswith('.zip'):
-                    self.core_data = self._make_memmap(fid, self._core_name)
-                    archive = zipfile.ZipFile(fid)
-                    filelist = archive.namelist()
-                    filelist.sort()
-                    for idx, files in enumerate(filelist[dims[0]: dims[1]]):
-                        imgdata = archive.open(filelist[idx])
-                        temp_slice = gen_slice(os.path.join(fid,files), dims)
-                        self.core_data[idx] = temp_slice
-                        self.core_data.flush()
-                    self.fileid = fid
-                    if self.verbose:
-                        print "Zipped data loaded from : ", fid
-        
-                '''   and a numpy file. ''' 
-                if fid.__class__ == str and fid.endswith('.npy'):
-                    self.core_data = np.load(fid, mmap_mode='r')[dims[0]: dims[1], 
-                                                                 dims[2]: dims[3],
-                                                                 dims[4]: dims[5]]
-                    self.core_data = np.array(self.core_data, dtype=bool)
-                    self.fileid = fid
-                    if self.verbose:
-                        print "Npy file loaded from : ", fid
+        read_fid(self, fid, dims)
 
         if self.verbose:
             print time.ctime()
             
 
         if invert_array == True:
+            print(self.core_data)
             self.core_data = np.invert(self.core_data)
+            print(self.core_data)
         
         self.core_data = self.core_data / self.core_data.max()
         
@@ -842,6 +830,7 @@ class CoreScan:
             si = slice_index
 
             label, objs = lbl(self.core_data[si][dims[0]:dims[1], dims[2]:dims[3]], np.ones((3,3)))
+            print(label)
             
             pts = [(np.cos(2*np.pi*_/6), np.sin(2*np.pi*_/6)) for _ in range(6)]
     
