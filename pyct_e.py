@@ -71,9 +71,9 @@ from scipy.spatial.distance import cdist, euclidean
 #==============================================================================
 
 def depyct(fid):
-    core_scan_configs = {'dims'         : [0, 100,
-                                           0, 100,
-                                           0, 100],
+    core_scan_configs = {'dims'         : [0, 50,
+                                           0, 50,
+                                           0, 50],
                          'verbose'      : True,
                          'temp_folder'  : None,
                          'invert_array' : True
@@ -89,7 +89,7 @@ def depyct(fid):
                    }
     plot_configs = {'paste'    : True,
                     'voids'    : True,
-                    'subgraph' : 'mst',
+                    'subgraph' : 'fbt',
                     'o_map'    : None
                     }
     scan = CoreScan(fid, **core_scan_configs)
@@ -153,8 +153,9 @@ def gen_cell_slice(x_dim_o, y_dim_o, d_spacing, r_void):
                 base_slice[y_d : y_d + _y,
                            x_d : x_d + _x] += circle[:_y, :_x]
             except ValueError:
-                print 'Warning, ValueError: ', circle.shape, np.shape(base_slice[y_d : y_d + _y,
-                           x_d : x_d + _x])
+                print ('Warning, ValueError: ',
+                       circle.shape,
+                       np.shape(base_slice[y_d : y_d + _y, x_d : x_d + _x]))
 
         x_shift = not x_shift
 
@@ -752,20 +753,17 @@ class Triangulate(object):
         matrix computations. Probably slow if there are particularly *large*
         objects in view.
         """
-        list_length = len(self.candidate_dict)
-        chunk_length = np.max((int(np.round(list_length/100)),
-                               self.verbosity/10))
-        temp_start_time = time.time()
         if self.verbose:
             print "Started brute force at : ", time.ctime()
-        i = 0
+        percent_vars = self.percent_c_setup(self.candidate_dict)
+        i, list_length, chunk_length, temp_start_time = percent_vars
         for key,value in self.candidate_dict.iteritems():
+            self.candidate_dict[key] = _cdist_refinement(value, self.e_dict)
             if self.verbose:
                 i += 1
                 self.percent_complete(i, chunk_length,
                                       list_length,
                                       temp_start_time)
-            self.candidate_dict[key] = _cdist_refinement(value, self.e_dict)
         if self.verbose:
             print "Completed brute force at : ", time.ctime()
 
@@ -842,6 +840,13 @@ class Triangulate(object):
             print("%d percent complete, in sec %d of %d"
                    % (int(100 * p_comp), int(current_time), int(ttf)))
 
+    def percent_c_setup(self, input_list):
+        i = 0
+        list_length = len(input_list)
+        chunk_length = np.max((int(np.round(list_length/100)), self.verbosity))
+        temp_start_time = time.time()
+        return i, list_length, chunk_length, temp_start_time
+
     def plot_figs(self): # break into two sperate fns
         """
         When the slice index is specified, used to create a set of six
@@ -863,6 +868,10 @@ class Triangulate(object):
                      [self.rng_list      , self.rng_min_v_map],
                      [self.paste_list    , self.min_v_map    ]]
 
+        fig_list = [[self.fig00, self.fig01],
+                    [self.fig10, self.fig11],
+                    [self.fig20, self.fig21]]
+
         title_list = ['(a)', '(b)', '(c)', '(d)', '(e)', '(f)']
         f, axarr = plt.subplots(3, 2)
 
@@ -873,10 +882,10 @@ class Triangulate(object):
             for j in xrange(2):
                 plot_index += 1
                 if i == 0 and j == 0:
-                    axarr[i, j].imshow(self.figij, cmap = cm.gray_r)
+                    axarr[i, j].imshow(fig_list[i][j], cmap = cm.gray_r)
                     x1,x2,y1,y2 = axarr[i, j].axis()
                 else:
-                    axarr[i,j].imshow(self.figij, cmap = self.c_map)
+                    axarr[i,j].imshow(fig_list[i][j], cmap = self.c_map)
                     for vals in plot_list[plot_index][0]:
                         axarr[i,j].plot(*vals, marker = ' ', color = 'r')
                     for vals in plot_list[plot_index][1]:
@@ -889,38 +898,12 @@ class Triangulate(object):
                 axarr[i, j].set_xlabel(title_list.pop(0))
         f.tight_layout()
 
-    def est_void_size(self): # break into smaller fns
-        (self.candidate_list,
-         self.fbt_paste_mags,
-         self.fbt_label_list,
-         self.fbt_point_list) = _gen_lists_from_dict(self.candidate_dict,
-                                                     self.recalc)
-        (self.rng_list,
-         self.rng_paste_mags,
-         self.rng_label_list,
-         self.rng_point_list) = _gen_lists_from_dict(self.rng_dict,
-                                                     self.recalc)
-        (self.paste_list,
-         self.paste_mags,
-         self.label_list,
-         self.point_list) = _gen_lists_from_dict(self.mst_dict,
-                                                 self.recalc)
-        (self.fbt_void_mags,
-         self.fbt_min_v_map) = _calc_voids_chords(self.fbt_point_list,
-                                                  self.e_label)
-        (self.rng_void_mags,
-         self.rng_min_v_map) = _calc_voids_chords(self.rng_point_list,
-                                                  self.e_label)
-        (self.void_mags,
-         self.min_v_map) = _calc_voids_chords(self.point_list,
-                                              self.e_label)
-        self._pastes = [self.fbt_paste_mags,
-                        self.rng_paste_mags,
-                        self.paste_mags]
-        self._voids = [self.fbt_void_mags,
-                       self.rng_void_mags,
-                       self.void_mags]
-        self.paste_void_pairs = zip(self._pastes, self._voids)
+    def est_void_size(self):
+        self.est_fbt()
+        self.est_rng()
+        self.est_mst()
+        self.est_min_v_maps()
+        self.est_pastes_voids()
 
         [self.fbt_paste_mean,
          self.fbt_void_mean,
@@ -938,6 +921,47 @@ class Triangulate(object):
                                               self.correction_factor,
                                               self.ideal_wall_ratio)
                                         for p,v in self.paste_void_pairs]))
+
+    def est_fbt(self):
+        (self.fbt_paste_list,
+         self.fbt_paste_mags,
+         self.fbt_label_list,
+         self.fbt_point_list) = _gen_lists_from_dict(self.candidate_dict,
+                                                     self.recalc)
+
+    def est_rng(self):
+        (self.rng_paste_list,
+         self.rng_paste_mags,
+         self.rng_label_list,
+         self.rng_point_list) = _gen_lists_from_dict(self.rng_dict,
+                                                     self.recalc)
+
+    def est_mst(self):
+        (self.paste_list,
+         self.paste_mags,
+         self.label_list,
+         self.point_list) = _gen_lists_from_dict(self.mst_dict,
+                                                 self.recalc)
+
+    def est_min_v_maps(self):
+        (self.fbt_void_mags,
+         self.fbt_min_v_map) = _calc_voids_chords(self.fbt_point_list,
+                                                  self.e_label)
+        (self.rng_void_mags,
+         self.rng_min_v_map) = _calc_voids_chords(self.rng_point_list,
+                                                  self.e_label)
+        (self.void_mags,
+         self.min_v_map) = _calc_voids_chords(self.point_list,
+                                              self.e_label)
+
+    def est_pastes_voids(self):
+        self._pastes = [self.fbt_paste_mags,
+                        self.rng_paste_mags,
+                        self.paste_mags]
+        self._voids = [self.fbt_void_mags,
+                       self.rng_void_mags,
+                       self.void_mags]
+        self.paste_void_pairs = zip(self._pastes, self._voids)
 
     def recolor_array_fn(self):
         self.recolor_array = self.label
@@ -1028,16 +1052,9 @@ class DelaunayTri(Triangulate):
                 print "completed edge_dict at :", time.ctime()
 
     def fill_edge_dicts(self):
-        i = 0
-        list_length = len(self.edge_dict)
-        chunk_length = np.max((int(np.round(list_length/100)), self.verbosity))
-        temp_start_time = time.time()
+        percent_vars = super(DelaunayTri, self).percent_c_setup(self.edge_dict)
+        i, list_length, chunk_length, temp_start_time = percent_vars
         for pair, lab_val in self.edge_dict.iteritems():
-            if self.verbose:
-                i += 1
-                super(DelaunayTri, self).percent_complete(i, chunk_length,
-                                                       list_length,
-                                                       temp_start_time)
             pair = [self.triang.points[_] for _ in pair]
             point_2, point_1  = np.array(pair[0]), np.array(pair[1])
             self.triang_list.append(_gen_trans_list(pair))
@@ -1052,8 +1069,13 @@ class DelaunayTri(Triangulate):
                                            lab_val[1],
                                            cur_dist)
                 self.candidate_dict[lab_val] = data_list
+            if self.verbose:
+                i += 1
+                super(DelaunayTri, self).percent_complete(i, chunk_length,
+                                                       list_length,
+                                                       temp_start_time)
 
-    def create_figs(self): # original code has this run if the method is 'cdist' but 'cdist' fails a prior assert
+    def create_figs(self):
         self.fig00 = self.core_data[self.si]
         self.fig01 = self.recolor_array
         self.fig10 = self.recolor_array
@@ -1121,7 +1143,7 @@ class DirichletTri(Triangulate):
                                            self.dims[2]: self.dims[3],
                                            self.dims[4]: self.dims[5]]
 
-    def get_points(self, bc, guest_arrays): # clean up
+    def get_points(self, bc, guest_arrays):
         point_1 = [self.indices[x][bc] for x in xrange(self.dim_num)]
         p_0 = self.label[tuple(point_1)]
         [possible_labels, possible_dists] = guest_arrays
@@ -1143,19 +1165,11 @@ class DirichletTri(Triangulate):
         p_1 = self.label[tuple(point_2)]
         return p_0, p_1, point_1, point_2
 
-    def border_pt_helper(self): # clean up
-        host_arrays = [self.water_array,
-                       self.edt_array]
-        i = 0
-        list_length = len(self._z)
-        chunk_length = np.max((int(np.round(list_length/100)), self.verbosity))
-        temp_start_time = time.time()
+    def border_pt_helper(self):
+        host_arrays = [self.water_array, self.edt_array]
+        percent_vars = super(DirichletTri, self).percent_c_setup(self._z)
+        i, list_length, chunk_length, temp_start_time = percent_vars
         for bc in self.border_coords:
-            if self.verbose:
-                i += 1
-                super(DirichletTri, self).percent_complete(i, chunk_length,
-                                                        list_length,
-                                                        temp_start_time)
             bc = tuple(bc)
             go_to_next_point = False
             for dim in range(self.dim_num):
@@ -1181,6 +1195,11 @@ class DirichletTri(Triangulate):
                                         p_0, p_1,
                                         cur_dist)
             self.candidate_dict[(p_0, p_1)] = data_list
+            if self.verbose:
+                i += 1
+                super(DirichletTri, self).percent_complete(i, chunk_length,
+                                                        list_length,
+                                                        temp_start_time)
         if self.verbose:
             print "completed candidate_dict at :", time.ctime()
             print 'serial time taken         : ', time.time() - temp_start_time
@@ -1316,5 +1335,3 @@ def plot_pores(core,
                         color = (0, 0, 1)) # Draw void lines
 
     a = anim() # Start the animation.
-
-
