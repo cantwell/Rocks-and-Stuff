@@ -148,20 +148,20 @@ def metric2(rock):
             return 100*euclidean(point1, point2)
     return distance
     
-def rock_AStar(rock, start, end, distance, h):
-    def adj(point, visit):
-        x, y, z = point
-        list = [(x+1, y, z), (x-1, y, z), (x, y+1, z), (x, y-1, z), (x, y, z+1), (x, y, z-1), (x+1, y+1, z), (x-1, y+1, z), (x+1, y-1, z), (x+1, y, z+1), (x+1, y, z-1), 
-                (x, y+1, z+1), (x, y+1, z-1)]
-        list = filter(lambda (x, y, z): (x in range(rock.shape[0]) and y in range(rock.shape[1]) and z in range(rock.shape[2]) and not (x, y, z) in visit), list)
-        return list
-    
+def adj(rock, point, visit):
+    x, y, z = point
+    list = [(x+1, y, z), (x-1, y, z), (x, y+1, z), (x, y-1, z), (x, y, z+1), (x, y, z-1), (x+1, y+1, z), (x-1, y+1, z), (x+1, y-1, z), (x+1, y, z+1), (x+1, y, z-1), 
+            (x, y+1, z+1), (x, y+1, z-1)]
+    list = filter(lambda (x, y, z): (x in range(rock.shape[0]) and y in range(rock.shape[1]) and z in range(rock.shape[2]) and not (x, y, z) in visit), list)
+    return list
+
+def rock_AStar(rock, start, end, distance, h, adj):
     PQ = Queue.PriorityQueue()    
     PQ.put((h(start), 0, start, []))
     visited = [start]
     while(not PQ.empty()):
         (heu, d, rover, path) = PQ.get()
-        next = adj(rover, visited)
+        next = adj(rock, rover, visited)
         visited = visited + next
         #print(heu, d)
         if(rover == end):
@@ -173,8 +173,90 @@ def rock_AStar(rock, start, end, distance, h):
         print("Couldn't find end")
         return []
     else:
-        return path, visited
+        return d, path, visited
     
+def adj2(rock, point, visit):
+    x, y, z = point
+    list = [(x+1, y, z), (x-1, y, z), (x, y+1, z), (x, y-1, z), (x, y, z+1), (x, y, z-1), (x+1, y+1, z), (x-1, y+1, z), (x+1, y-1, z), (x+1, y, z+1), (x+1, y, z-1), 
+            (x, y+1, z+1), (x, y+1, z-1)]
+    list = filter(lambda (x, y, z): (x in range(rock.shape[0]) and y in range(rock.shape[1]) and z in range(rock.shape[2]) and not (x, y, z) in visit), list)
+    out = dict()
+    for elem in list:
+        out[elem] = []
+    return out
+
+def Astar(rock, start, end, distance, h, adj):
+    PQ = Queue.PriorityQueue()
+    visited = [start]
+    paths = dict()
+    paths[start] = []
+    distances = dict()
+    PQ.put((h(start), 0, start, []))
+    while(not PQ.empty()):
+        (he, d, rover, path) = PQ.get()
+        n = adj(rock, rover, visited)
+        visited = visited + n.keys()
+        for point in n.keys():
+            if(point in end):
+                paths[point] = path + n[point]
+            newd = d+distance(rover, point)
+            distances[point] = newd
+            PQ.put((newd+h(point), newd, point, path+[rover]+n[point]))
+        if(set(end).issubset(set(visited))):
+            break
+    if(not set(end).issubset(set(visited))):
+        print("search failed")
+    return paths, visited, distances
+
+def edges(rock, chunk):
+    e = []
+    for (x, y, z) in chunk:
+        if(x+1 in range(rock.shape[0])):
+            if(not rock[x][y][z] == rock[x+1][y][z]):
+                e = e + [(x, y, z)]             
+                continue
+        if(not rock[x][y][z] == rock[x-1][y][z]):
+            e = e + [(x, y, z)]             
+            continue
+        if(not rock[x][y][z] == rock[x][y+1][z]):
+            e = e + [(x, y, z)]             
+            continue
+        if(not rock[x][y][z] == rock[x][y-1][z]):
+            e = e + [(x, y, z)]             
+            continue
+        if(not rock[x][y][z] == rock[x][y][z+1]):
+            e = e + [(x, y, z)]             
+            continue
+        if(not rock[x][y][z] == rock[x][y][z-1]):
+            e = e + [(x, y, z)]             
+            continue
+    return e
+
+def chunk(rock, distance, chunks):
+    adj_dict = dict()
+    distance_dict = dict()
+    for chunk in chunks:
+        e = edges(rock, chunk)
+        for point1 in e: 
+            temp = e[:]
+            temp.remove(point1)
+            paths, visited, distances = Astar(rock, point1, temp, distance, lambda x : 0, adj2)
+            distance_dict[point1] = distances
+            adj_dict[point1] = paths
+    def d(point1, point2):
+        if(point1 in distance_dict):
+            if(point2 in distance_dict[point1]):
+                return distance_dict[point1][point2]
+        return distance(point1, point2)
+
+    def adjac(rock, point, visit):
+        if(point in adj_dict):
+            return adj_dict[point]
+        else:
+            return adj2(rock, point, visit)
+            
+    return d, adjac
+
 def plot_path(points, rock):
     path_rock = np.ones(rock.shape)
     for (x, y, z) in points:
@@ -194,6 +276,14 @@ def plot_path(points, rock):
                    opacity = .2 + .8/rock.shape[0]) # Draw pores for 3d, changed froo .20 * 100 / self.shape[0]
     mlab.contour3d(path_rock)
     a = anim()
+    
+def boundingbox(x1, y1, z1, x2, y2, z2):
+    temp = []
+    for x in range(x1, x2):
+        for y in range(y1, y2):
+            for z in range(z1, z2):
+                temp += [(x, y, z)]
+    return temp
     
     
 ###########################################
