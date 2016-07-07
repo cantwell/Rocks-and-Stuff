@@ -161,12 +161,11 @@ def rock_AStar(rock, start, end, distance, h, adj):
     visited = [start]
     while(not PQ.empty()):
         (heu, d, rover, path) = PQ.get()
-        next = adj(rock, rover, visited)
-        visited = visited + next
-        #print(heu, d)
+        n = adj(rock, rover, visited)
+        visited = visited + n.keys()
         if(rover == end):
             break
-        for point in next:
+        for point in n:
             newd = d + distance(rover, point)
             PQ.put((newd + h(point), newd, point, path + [rover]))
     if(rover != end):
@@ -208,26 +207,25 @@ def Astar(rock, start, end, distance, h, adj):
         print("search failed")
     return paths, visited, distances
 
-def edges(rock, chunk):
+def edges(chunk):
     e = []
     for (x, y, z) in chunk:
-        if(x+1 in range(rock.shape[0])):
-            if(not rock[x][y][z] == rock[x+1][y][z]):
+        if(not (x+1, y, z) in chunk):
                 e = e + [(x, y, z)]             
                 continue
-        if(not rock[x][y][z] == rock[x-1][y][z]):
+        if(not (x-1, y, z) in chunk):
             e = e + [(x, y, z)]             
             continue
-        if(not rock[x][y][z] == rock[x][y+1][z]):
+        if(not (x, y+1, z) in chunk):
             e = e + [(x, y, z)]             
             continue
-        if(not rock[x][y][z] == rock[x][y-1][z]):
+        if(not (x, y-1, z) in chunk):
             e = e + [(x, y, z)]             
             continue
-        if(not rock[x][y][z] == rock[x][y][z+1]):
+        if(not (x, y, z+1) in chunk):
             e = e + [(x, y, z)]             
             continue
-        if(not rock[x][y][z] == rock[x][y][z-1]):
+        if(not (x, y, z-1) in chunk):
             e = e + [(x, y, z)]             
             continue
     return e
@@ -235,14 +233,20 @@ def edges(rock, chunk):
 def chunk(rock, distance, chunks):
     adj_dict = dict()
     distance_dict = dict()
+    total_chunk = []
     for chunk in chunks:
+        total_chunk += chunk
         e = edges(rock, chunk)
+        print(e)
         for point1 in e: 
+            print point1
             temp = e[:]
             temp.remove(point1)
             paths, visited, distances = Astar(rock, point1, temp, distance, lambda x : 0, adj2)
             distance_dict[point1] = distances
             adj_dict[point1] = paths
+    print(distance_dict)
+    print(adj_dict)
     def d(point1, point2):
         if(point1 in distance_dict):
             if(point2 in distance_dict[point1]):
@@ -251,7 +255,14 @@ def chunk(rock, distance, chunks):
 
     def adjac(rock, point, visit):
         if(point in adj_dict):
-            return adj_dict[point]
+            temp_dict = adj_dict[point].copy()
+            for p in adj2(rock, point, visit):
+                temp_dict[p] = []
+            l = filter(lambda x : not x in visited or not x in chunk, temp_dict.keys())
+            ret = dict()
+            for x in l:
+                ret[x] = temp_dict[x]
+            return ret
         else:
             return adj2(rock, point, visit)
             
@@ -285,7 +296,128 @@ def boundingbox(x1, y1, z1, x2, y2, z2):
                 temp += [(x, y, z)]
     return temp
     
+def get_component_array(array, list):
+     if(list == []):
+         return []
+     temp = []
+     for (x, y, z) in list:
+         list.remove((x, y, z))
+         if(array[x][y][z] == 0):
+             array[x][y][z] = 255
+             temp = temp + [(x, y, z)]
+             if(x < array.shape[0] - 1):
+                 list = list + [(x+1, y, z)]
+             if(x > 0):
+                 list = list + [(x-1, y, z)]
+             if(y < array.shape[1] - 1):
+                 list = list + [(x, y+1, z)]
+             if(y > 0):
+                 list = list + [(x, y-1, z)]
+             if(z < array.shape[2] - 1):
+                 list = list + [(x, y, z+1)]
+             if(z > 0):
+                 list = list + [(x, y, z-1)]
+     return temp + get_component_array(array, list)
+
+def get_component(array, temp, x, y, z, i):
+     list = [(x, y, z)]
+     l = get_component_array(array, list)
+     if(l == []):
+         return (temp, i)
+     temp[i] = l
+     i = i+1
+     return (temp, i)    
     
+def scan(array):
+    temp = dict()
+    i = 0
+    a = array.copy()
+    labels = list(list(list(-1 for x in range(array.shape[2])) for y in range(array.shape[1])) for z in range(array.shape[0]))
+    for x in range(array.shape[0]):
+        for y in range(array.shape[1]):
+            for z in range(array.shape[2]):
+                if(array[x][y][z] == 0):
+                    (temp, i) = get_component(a, temp, x, y, z, i)
+                    for (x, y, z) in temp[i-1]:
+                        labels[x][y][z] = i-1
+    return temp, labels
+
+def adjCount(labels, point, eps):
+    x, y, z = point
+    found = [labels[x][y][z]]
+    for x1 in range(x-eps, x+eps):
+        for y1 in range(y-eps, y+eps):
+            for z1 in range(z-eps, z+eps):
+                if(x1 in range(len(labels)) and y1 in range(len(labels[0])) and z1 in range(len(labels[0][0])) and euclidean((x1, y1, z1), point) < eps):
+                    if((not labels[x1][y1][z1] in found) and labels[x1][y1][z1] != -1):
+                        found = list(set(found) | set([labels[x1][y1][z1]]))
+    return found
+
+def regionQuery(graph, labels, i, eps):
+    found = []
+    for point in edges(graph[i]):
+        found = list(set(found) | set(adjCount(labels, point, eps)))
+    return found
+
+
+#Usage: first run scan on the rock (a 3D numpy array), and feed the output in as graph and labels.  eps is the distance, and mincount is the 
+#minimum number of voids needed to be called a cluster.  The function returns a dictionary, with integers associated with different clusters
+#displayClusters will only show voids in a cluster.  
+def findClusters(graph, labels, eps, mincount):
+    visited = []
+    noise = []
+    numClusters = 0
+    clusters = dict()
+    for i in graph:
+        if(i in visited):
+            continue
+        else:
+            visited = visited + [i]
+            found = regionQuery(graph, labels, i, eps)
+            if(len(found) < mincount):
+                noise = noise + [i]
+            else:
+                clusters = expandCluster(graph, labels, i, found, numClusters, eps, mincount, clusters, visited)
+                numClusters = numClusters+1
+    return clusters
+
+def expandCluster(graph, labels, P, neighbors, C, eps, MinPts, clusters, visited):
+    clusters[C] = [P]
+    for i in neighbors:
+        if(not i in visited):
+            visited = visited + [i]
+            neighbors2 = regionQuery(graph, labels, i, eps)
+            if(len(neighbors2) >= MinPts):
+                neighbors = neighbors + neighbors2
+        if(not i in clusters.values()):
+            clusters[C] += [i]
+    return clusters
+    
+def displayClusters(rock, graph, clusters):
+    thing = np.zeros(rock.shape)
+    points = []
+    voids = []
+    for i in clusters.values():
+        voids += i
+    for i in voids:
+        points += graph[i]
+    for point in points:
+        x, y, z = point
+        thing[x][y][z] = 255
+    @mlab.animate
+    def anim():
+        f = mlab.gcf()
+        while 1:
+            f.scene.camera.azimuth(1)
+            f.scene.render()
+            yield
+    mlab.figure(bgcolor=(1,1,1)) # Set bkg color
+    mlab.contour3d(thing, 
+                   color = (0,0,0),
+                   contours = 2,
+                   opacity = .2 + .8/rock.shape[0]) # Draw pores for 3d, changed froo .20 * 100 / self.shape[0]
+    a = anim()
+
 ###########################################
 ##Code to make D-RNG.  
 ###########################################    
@@ -426,3 +558,4 @@ def boundingbox(x1, y1, z1, x2, y2, z2):
 #                 print("Joining: ", graph[key][0][0], graph[key][0][1], graph[elem][0][0], graph[elem][0][1])
 #                 image = join(graph[key][0][0], graph[key][0][1], graph[elem][0][0], graph[elem][0][1], image)
 #     image.show()
+
