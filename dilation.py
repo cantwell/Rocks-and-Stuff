@@ -12,9 +12,11 @@ import numpy.ma as ma
 from scipy import ndimage
 from scipy.ndimage import label as lbl
 from scipy.ndimage.morphology import binary_dilation as bd
+from scipy.ndimage.morphology import grey_dilation as gd
+
 
 #==============================================================================
-#
+# pyct functions
 #==============================================================================
 
 def add_top_bottom_voids(data):
@@ -67,19 +69,8 @@ def _tiff_to_3d(img,start_frame,end_frame):
     return img_3d
 
 #==============================================================================
-# def process(core_data, label):
-#     # hacky pre-process demo
-#     while not has_path(label):
-#         core_data = bd(core_data, iterations=1).astype(bool)
-#         core_data = core_data.astype(int)
-#         label = lbl(core_data)[0]
-#     return core_data, label
+# Experimental stuff
 #==============================================================================
-
-def has_path(label):
-    (z0,y0,x0) = (0, 0, 0)
-    (z1,y1,x1) = (label.shape[0] - 1, label.shape[1] - 1, label.shape[2] - 1)
-    return label[z0][y0][x0] == label[z1][y1][x1]
 
 def clear_unimportant_voids(processed_data):
     label = lbl(processed_data)
@@ -88,76 +79,75 @@ def clear_unimportant_voids(processed_data):
     mask = mask.astype(int)
     return processed_data * mask
 
-#def reprocess(core, label):
-#==============================================================================
-# Experimental stuff
-#==============================================================================
-
-# need to dilate based off of each voids relative height to other voids, try to
-# get the voids to scale based off of an equal-worth distance metric.
-# i.e.: for a tiny void, barely dilate it while for a big void, dilate it tons
-# after dilation, trim the boundary down based off of the heuristic
-#==============================================================================
-#
-# def get_scaling_factors(core, label, num_voids):
-#     print "Getting scaling factors..."
-#     bounds_pool = ndimage.find_objects(label[0])
-#     total_void_height = 0
-#     for void in xrange(num_voids):
-#         top = bounds_pool[void][0].stop # gets the upper z-coord of each void's bounding box
-#         bot = bounds_pool[void][0].start # gets the lower z-coord of each void's bounding box
-#         total_void_height += top - bot
-#     avg_void_height = float(total_void_height) / num_voids
-#     void_scaling_factors = []
-#     for void in xrange(num_voids):
-#         top = bounds_pool[void][0].stop # gets the upper z-coord of each void's bounding box
-#         bot = bounds_pool[void][0].start # gets the lower z-coord of each void's bounding box
-#         void_ht = top - bot
-#         scaling_factor = void_ht / avg_void_height
-#         void_scaling_factors = np.append(void_scaling_factors, scaling_factor)
-#     assert (len(void_scaling_factors) == num_voids)
-#     return void_scaling_factors
-#
-#==============================================================================
-
-#==============================================================================
-# def get_masks(core, label, num_voids):
-#     print "Getting masks..."
-#     masks = []
-#     for void in xrange(num_voids):
-#         print "Mask", void, "out of", num_voids
-#         mask = np.ma.masked_equal(label[0], void + 1)
-#         masks = np.append(masks, mask)
-#     print len(masks)
-#     return masks
-#==============================================================================
-
-def weighted_process(core_data): # add an option to see possible search spaces for additional ticks
+def process(core_data):
     start = time.clock()
-    label = lbl(core_data)
-    num_voids = label[1]
-    voids = make_voids(core_data, label, num_voids)
-    dilation = np.copy(core_data)
-    dlabel = lbl(dilation)
+    weighted_space = weight_space(core_data)
+    print "Processing..."
     tick = 0
-    print "Expanding voids..."
-    while not has_path(dlabel[0]):
+    label = lbl(core_data)
+    weighted_space_tick = np.copy(weighted_space)
+    while not has_path(label[0]):
         tick += 1
         print "  Tick:", tick
-        for void in xrange(num_voids):
-            iters = int(tick * voids[void].scaling_factor)
-            temp_mask = voids[void].mask
-            for i in xrange(iters):
-                temp_mask = bd(temp_mask)
-                dilation = bd(dilation,
-                              mask = temp_mask).astype(int)
-        dlabel = lbl(dilation)
-        if not has_path(dlabel[0]):
-            dilation = np.copy(core_data)
+        mask = np.ma.masked_greater_equal(weighted_space, 1)
+        mask = np.ma.getmask(mask)
+        mask = bd(mask)
+        weighted_space = weighted_space % 1
+        weighted_space += weighted_space_tick
+        weighted_space_tick = (weighted_space_tick # original
+                               + mask*gd(weighted_space_tick, size = 3) # add the masked dilated space
+                               - mask*weighted_space_tick) # subtract anything which isn't new
+        weighted_space += (tick * (mask*gd(weighted_space_tick, size = 3)) % 1 # updates the expanded space to the right void amount
+                           - tick * (mask*weighted_space_tick) % 1)
+        core_data = bd(core_data, mask = mask).astype(int)
+        label = lbl(core_data)
     print "Time taken:", time.clock() - start, "seconds"
-    return dilation
+    return core_data
 
-def get_avg_void_height(core, bounds_pool, num_voids):
+def has_path(label):
+    (z0,y0,x0) = (0, 0, 0)
+    (z1,y1,x1) = (label.shape[0] - 1, label.shape[1] - 1, label.shape[2] - 1)
+    return label[z0][y0][x0] == label[z1][y1][x1]
+
+def heuristic(core_data, avg_height):
+    core_data = core_data / avg_height
+    core_data[core_data < 1] = core_data[core_data < 1]**2
+    return core_data
+
+def weight_space(core_data): # make an array which has varying values
+    print "Weighting space..."
+    label = lbl(core_data)
+    bounds_pool = ndimage.find_objects(label[0])
+    num_voids = lbl(core_data)[1]
+    avg_height = get_avg_void_height(core_data, bounds_pool, num_voids)
+    core_data = replace_voids_with_heights(label[0], bounds_pool, num_voids)
+    weighted_space = heuristic(core_data, avg_height)
+    weighted_space = weighted_space / np.amax(weighted_space) # maps weighted_space to values in [0,1]
+    return weighted_space
+
+def seg_print(void, num_voids, chunk_size):
+    chunk_seg = void / chunk_size
+    chunk_lo = chunk_seg * chunk_size + 1
+    chunk_hi = (chunk_seg + 1) * chunk_size
+    if chunk_seg == 9:
+        chunk_hi = num_voids
+    print("  Replacing voids %d - %d out of %d"
+             %(chunk_lo, chunk_hi, num_voids))
+
+def replace_voids_with_heights(label_array, bounds_pool, num_voids):
+    chunk_size = num_voids / 10 + 10 - num_voids % 10
+    for void in xrange(1, num_voids + 1):
+        if (void - 1) % chunk_size == 0:
+            seg_print(void, num_voids, chunk_size)
+        bounding_box = bounds_pool[void - 1]
+        top = bounding_box[0].stop # gets the upper z-coord of each void's bounding box
+        bot = bounding_box[0].start # gets the lower z-coord of each void's bounding box
+        void_ht = top - bot
+        label_array[bounding_box][label_array[bounding_box] == void] = void_ht
+    return label_array
+
+def get_avg_void_height(core_data, bounds_pool, num_voids):
+    print "Getting average void height..."
     total_void_height = 0
     for void in xrange(num_voids):
         top = bounds_pool[void][0].stop # gets the upper z-coord of each void's bounding box
@@ -165,112 +155,6 @@ def get_avg_void_height(core, bounds_pool, num_voids):
         total_void_height += top - bot
     avg_void_height = float(total_void_height) / num_voids
     return avg_void_height
-
-def make_voids(core, label, num_voids):
-    voids = {}
-    bounds_pool = ndimage.find_objects(label[0])
-    print "Getting average void height..."
-    avg_void_height = get_avg_void_height(core, bounds_pool, num_voids)
-    print "Populating voids..."
-    for void in xrange(num_voids):
-        print "  Populating void", void + 1, "out of", num_voids
-        top = bounds_pool[void][0].stop # gets the upper z-coord of each void's bounding box
-        bot = bounds_pool[void][0].start # gets the lower z-coord of each void's bounding box
-        void_ht = top - bot
-        if void_ht / avg_void_height <= float(1)/3:
-            scaling_factor = ((void_ht / avg_void_height)**2) / 2
-        else:
-            scaling_factor = (void_ht / avg_void_height) / 2
-        mask = np.ma.getmask(np.ma.masked_equal(label[0], void + 1))
-        voids[void] = Void(mask, scaling_factor)
-    print "Voids populated..."
-    return voids
-
-class Void(object):
-    def __init__(self, mask, scaling_factor, bounding_box):
-        self.mask = mask
-        self.scaling_factor = scaling_factor
-        self.bounding_box = bounding_box
-
-#==============================================================================
-#
-# class Void(object):
-#     def __init__(self, vertices, heuristic_vector, avg_size, void_size):
-#         self.initial_vertices = vertices
-#         self.expanded_vertices = self.initial_vertices
-#         #self.center = get_center(vertices)
-#         scaling_factor = void_size / avg_size
-#         self.heuristic = self.get_adj_heuristic(heuristic_vector,
-#                                                 scaling_factor)
-#
-#     def get_adj_heuristic(self, heuristic_vector, scaling_factor):
-#         heur = np.zeros((3,3))
-#         for i in xrange(3):
-#             heur[i][i] = heuristic_vector[i]
-#         heur = scaling_factor * heur
-#         return heur
-#
-#     def get_center(self):
-#         pass
-#
-#     def scale(self):
-#         for v in self.expanded_vertices:
-#             self.expand(v)
-#         # connect all of the vertices back together
-#
-#     def expand(self, vertice):
-#         v = np.dot(self.heuristic, vertice)
-#
-#     def trim(self):
-#         pass
-#
-# def make_voids(data, heuristic_vector):
-#     voids = []
-#     bounds = get_bounds(data)
-#     label = lbl(bounds)
-#     bounds_pool = ndimage.find_objects(label[0])
-#     avg_size = float(np.sum(data)) / label[1]
-#     for i in label[1]:
-#         obj_bounds = bounds_pool[i]
-#         void_size = np.sum(data[obj_bounds])
-#         void_height = obj_bounds[0]
-#         pts = np.where(bounds[obj_bounds] >= 1)
-#         voids.append(Void(pts, heuristic_vector, avg_size, void_size))
-#     return voids
-#
-# def get_verts(pts):
-#     pass
-#
-# def run_voids(voids):
-#     for void in voids:
-#         void.scale()
-#     for void in voids:
-#         fill_void(void)
-#         # label voids to see connections
-#
-# def get_bounds(data):
-#     return data - ndimage.binary_erosion(data)
-#
-# def fill_void(void):
-#     for vertex in void.expanded_vertices:
-#         pass
-#==============================================================================
-
-    # for each label:
-    # get boundary of label
-
-#def has_path():
-#    pass
-
-#def process():
-#    pass
-    # 1. Get individual voids from the total space
-    # 2. Triangulate each void and put vertices into a dictionary containing
-    # void number, new label number, and original label number
-    # 3. Expand the shape by a distance
-    # 4. If the starting point label and the end point label are equal, reduce
-    # the search space to all voids which share the same label as the start/end
-
 
 #==============================================================================
 # plot_pores
