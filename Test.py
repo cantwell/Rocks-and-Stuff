@@ -8,6 +8,7 @@ import Queue
 from scipy.spatial.distance import euclidean
 from scipy.spatial import Delaunay
 from mayavi import mlab
+import math
 
 def _2d_to_3d(fid): # turns 2d numpy arrays into 3d numpy arrays
     if len(fid.shape) == 2:
@@ -22,12 +23,37 @@ def tiff_to_3d(img,start_frame,end_frame):
         end_frame = img.n_frames
     img.seek(start_frame)    
     slice_2d = np.asarray(img)
-    img_3d = _2d_to_3d(slice_2d)        
+    img_3d = _2d_to_3d(slice_2d)     
+    if(end_frame == start_frame + 1):
+        return img_3d
     for frame in range(start_frame + 1, end_frame):
         img.seek(frame)    
         slice_2d = np.asarray(img)
         slice_3d = _2d_to_3d(slice_2d)
         img_3d = np.concatenate((img_3d, slice_3d), axis = 0)
+    return img_3d
+
+#call blackify on a color 2-D image to turn it into a 3-D numpy array
+#that can be passed to rock_AStar
+def blackify(rock):
+    rock2 = np.zeros((rock.shape[0], rock.shape[1], 1), dtype = np.uint8)
+    rock2.fill(255)
+    for x in range(rock.shape[0]):
+        for y in range(rock.shape[1]):
+            for z in range(rock.shape[2]):
+                if(rock[x][y][z] != 255):
+                    rock2[x][y][0] = 0
+    return rock2
+
+def tif_to_3d(img, x0, x1, y0, y1, z0, z1):
+    img.seek(x0)
+    slice_2d = np.asarray(img.crop((y0, z0, y1, z1)))
+    img_3d = _2d_to_3d(slice_2d) 
+    for frame in range(x0+1, x1):
+        img.seek(frame)
+        slice_2d = np.asarray(img.crop((y0, z0, y1, z1)))
+        slice_3d = _2d_to_3d(slice_2d)
+        img_3d = np.concatenate((img_3d, slice_3d))
     return img_3d
 
 def read_tiff(filename):
@@ -138,14 +164,14 @@ def sub(point1, point2):
 
 #Sample heuristic.  Returns the function to be passed into A*
 def sampleh(start, end):
-    return (lambda point :  70*(-dot(sub(start, point), sub(start, end)/euclidean(start, end))))
+    return (lambda point :  7*(-dot(sub(start, point), sub(start, end)/euclidean(start, end))))
             
 def metric2(rock):
     def distance(point1, point2):
         if(rock[point2[0]][point2[1]][point2[2]] == 0):
             return euclidean(point1, point2)
         else:
-            return 100*euclidean(point1, point2)
+            return 10*euclidean(point1, point2)
     return distance
     
 def adj(rock, point, visit):
@@ -236,7 +262,7 @@ def chunk(rock, distance, chunks):
     total_chunk = []
     for chunk in chunks:
         total_chunk += chunk
-        e = edges(rock, chunk)
+        e = edges(chunk)
         print(e)
         for point1 in e: 
             print point1
@@ -359,10 +385,6 @@ def regionQuery(graph, labels, i, eps):
         found = list(set(found) | set(adjCount(labels, point, eps)))
     return found
 
-
-#Usage: first run scan on the rock (a 3D numpy array), and feed the output in as graph and labels.  eps is the distance, and mincount is the 
-#minimum number of voids needed to be called a cluster.  The function returns a dictionary, with integers associated with different clusters
-#displayClusters will only show voids in a cluster.  
 def findClusters(graph, labels, eps, mincount):
     visited = []
     noise = []
@@ -377,7 +399,7 @@ def findClusters(graph, labels, eps, mincount):
             if(len(found) < mincount):
                 noise = noise + [i]
             else:
-                clusters = expandCluster(graph, labels, i, found, numClusters, eps, mincount, clusters, visited)
+                clusters, visited = expandCluster(graph, labels, i, found, numClusters, eps, mincount, clusters, visited)
                 numClusters = numClusters+1
     return clusters
 
@@ -391,7 +413,7 @@ def expandCluster(graph, labels, P, neighbors, C, eps, MinPts, clusters, visited
                 neighbors = neighbors + neighbors2
         if(not i in clusters.values()):
             clusters[C] += [i]
-    return clusters
+    return clusters, visited
     
 def displayClusters(rock, graph, clusters):
     thing = np.zeros(rock.shape)
@@ -417,6 +439,41 @@ def displayClusters(rock, graph, clusters):
                    contours = 2,
                    opacity = .2 + .8/rock.shape[0]) # Draw pores for 3d, changed froo .20 * 100 / self.shape[0]
     a = anim()
+    
+def generateCenters(clusters, graph):
+    centers = dict()
+    means = dict()
+    for i in clusters:
+        tx = 0
+        ty = 0
+        tz = 0
+        count = 0
+        for j in clusters[i]:
+            for (x, y, z) in graph[j]:
+                tx += x
+                ty += y
+                tz += z
+                count += 1
+        centers[i] = (tx/count, ty/count, tz/count)
+    for i in clusters:
+        std2 = 0
+        for j in clusters[i]:
+            for (x, y, z) in graph[j]:
+                std2 += (euclidean((x, y, z), centers[i]).astype(int))^2
+        means[i] = math.sqrt(std2)
+    return centers, means
+    
+def gaussian(x, mu, sig):
+    return np.exp(-np.power(x - mu, 2.) / (2 * np.power(sig, 2.)))
+    
+def clusterh(centers, means, c):
+    def heuristic(point):
+        total = 0
+        for i in centers:
+            total += gaussian(euclidean(centers[i], point), 0, means[i])
+        total = total * c
+        return -total
+    return heuristic
 
 ###########################################
 ##Code to make D-RNG.  
@@ -558,4 +615,3 @@ def displayClusters(rock, graph, clusters):
 #                 print("Joining: ", graph[key][0][0], graph[key][0][1], graph[elem][0][0], graph[elem][0][1])
 #                 image = join(graph[key][0][0], graph[key][0][1], graph[elem][0][0], graph[elem][0][1], image)
 #     image.show()
-
