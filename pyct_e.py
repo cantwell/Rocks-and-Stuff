@@ -29,19 +29,6 @@
     For more information contact carsonc@gmail.com
 
 """
-"""
-CHANGES:
-1. CoreScan's init now requires a string for the file id instead of a nparray
-2. Cleaned up the code to be more modular
-3. Triangulate is now a class requiring CoreScan's core_data
-"""
-"""
-TODO:
-1. Make synthetic arrays create a file of their output
-2. Readd verbose print statements to the code
-3. Fix behavior of chords inside voids
-3. Break code down even further
-"""
 
 #==============================================================================
 # Modules
@@ -71,9 +58,13 @@ from scipy.spatial.distance import cdist, euclidean
 #==============================================================================
 
 def depyct(fid):
-    core_scan_configs = {'dims'         : [0, 50,
-                                           0, 50,
-                                           0, 50],
+    """
+    Used to easily scan, triangulate, and plot a file. Just input a file path
+    and edit core_scan_configs, tri_configs, and plot_configs.
+    """
+    core_scan_configs = {'dims'         : [200, 400,
+                                           300, 400,
+                                           300, 400],
                          'verbose'      : True,
                          'temp_folder'  : None,
                          'invert_array' : True
@@ -93,6 +84,7 @@ def depyct(fid):
                     'o_map'    : None
                     }
     scan = CoreScan(fid, **core_scan_configs)
+    start = time.clock()
     if tri_configs.get('method') == 'Delaunay':
         triang = DelaunayTri(scan, **tri_configs)
         triang.run()
@@ -100,14 +92,14 @@ def depyct(fid):
         triang = DirichletTri(scan, **tri_configs)
         triang.run()
     else: triang = scan
+    print "Time taken:", time.clock() - start, "seconds"
     plot_pores(triang, **plot_configs)
-
 
 #==============================================================================
 # Two methods to generate synthetic arrays in 2d and 3d respectively.
 #==============================================================================
 
-def gen_cell_slice(x_dim_o, y_dim_o, d_spacing, r_void):
+def gen_cell_slice(x_dim_o, y_dim_o, d_spacing, r_void, fid):
     """
     Used to create synthetic hexagonal 2d array
     Inputs:
@@ -119,10 +111,8 @@ def gen_cell_slice(x_dim_o, y_dim_o, d_spacing, r_void):
             desired center-to-center distance between spheres
         r_void : integer
             desired radius of the voids
-
-    Output:
-        out_slice : 2d numpy array
-            an array with the desired dimensions and hexagonal 2d lattice.
+        fid: string
+            desired filename for the slice
     """
 
     x_dim = x_dim_o * 1.5
@@ -162,9 +152,9 @@ def gen_cell_slice(x_dim_o, y_dim_o, d_spacing, r_void):
     out_slice = np.abs(base_slice)[wt_ch(y_s):x_dim_o + wt_ch(y_s),
                                    wt_ch(y_s):y_dim_o + wt_ch(y_s)]
 
-    return out_slice
+    np.save(fid, out_slice)
 
-def gen_test_fcc(x_dim_o, y_dim_o, z_dim_o, d_spacing, r_void):
+def gen_test_fcc(x_dim_o, y_dim_o, z_dim_o, d_spacing, r_void, fid):
     """
     Used to create synthetic fcc array
     Inputs:
@@ -178,10 +168,8 @@ def gen_test_fcc(x_dim_o, y_dim_o, z_dim_o, d_spacing, r_void):
             desired center-to-center distance between spheres
         r_void : integer
             desired radius of the voids
-
-    Output:
-        out_slice : 3d numpy array
-            an array with the desired dimensions and an fcc lattice.
+        fid: string
+            desired filename for the fcc
     """
 
     base_slice_name = 'base_slice.dat'
@@ -214,7 +202,6 @@ def gen_test_fcc(x_dim_o, y_dim_o, z_dim_o, d_spacing, r_void):
 
     z_d = 0
     y_shift = False
-
 
     while z_d + 2*d_spacing < z_dim:
         z_d += wt_ch(d_spacing / 2)
@@ -256,13 +243,22 @@ def gen_test_fcc(x_dim_o, y_dim_o, z_dim_o, d_spacing, r_void):
                                    wt_ch(y_s):x_dim_o + wt_ch(y_s),]
 
     del base_slice
-
-    return out_slice
+    np.save(fid, out_slice)
 
 #==============================================================================
 # Internal methods used in CoreScan object. They are presented externally for
 # ease of testing and troubleshooting.
 #==============================================================================
+
+def add_top_bottom_voids(data):
+    height, width, depth = data.shape
+    boundary0 = np.zeros((1, width, depth))
+    boundary1 = np.ones((1, width, depth))
+    bot = np.concatenate((boundary0, boundary1))
+    top = np.concatenate((boundary1, boundary0))
+    data = np.concatenate((top, data))
+    data = np.concatenate((data, bot))
+    return data
 
 def _2d_to_3d(fid):
     """Turns 2d numpy arrays into 3d numpy arrays"""
@@ -468,6 +464,7 @@ def _tiff_to_3d(img,start_frame,end_frame):
         slice_2d = np.asarray(img)
         slice_3d = _2d_to_3d(slice_2d)
         img_3d = np.concatenate((img_3d, slice_3d), axis = 0)
+    img_3d = add_top_bottom_voids(img_3d)
     return img_3d
 
 def rem_files_in_list(fid, dat_file_names_list):
