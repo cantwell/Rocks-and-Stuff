@@ -67,12 +67,26 @@ def read_tif(filename):
     label, objs = scipy.ndimage.label(core)
     print(objs)
     return label
+
+def read_coloredslice(filename):
+    img = Image.open(filename)
+    rock = tiff_to_3d(img, None, None)
+    rock2 = blackify(rock)    
+    return rock2
     
 def sample(path):
     total = 0
     for i in range(len(path)):
         total += euclidean(path[i], path[i+1])
     return total
+    
+def crop(array, shape):
+    new = np.zeros(shape)
+    for i in range(shape[0]):
+        for j in range(shape[1]):
+            for k in range(shape[2]):
+                new[i][j][k] = array[i][j][k]
+    return new
     
 def get_edges(rock):
     edges = []
@@ -164,37 +178,47 @@ def sub(point1, point2):
 
 #Sample heuristic.  Returns the function to be passed into A*
 def sampleh(start, end):
-    return (lambda point :  7*(-dot(sub(start, point), sub(start, end)/euclidean(start, end))))
-            
-def metric2(rock):
+    return (lambda point :  300*(-dot(sub(start, point), sub(start, end)/(euclidean(start, point)*euclidean(start, end)))))
+
+def metric2(rock, c):
     def distance(point1, point2):
         if(rock[point2[0]][point2[1]][point2[2]] == 0):
             return euclidean(point1, point2)
         else:
-            return 10*euclidean(point1, point2)
+            return c*euclidean(point1, point2)
+    return distance
+
+def metric3(rock, c):
+    def distance(point1, point2):
+        x1 = point1[0]
+        x2 = point2[0]
+        if(rock[point2[0]][point2[1]][point2[2]] == 0):
+            return (1 + 4*abs(x1-x2))*euclidean(point1, point2)
+        else:
+            return (1 +4*abs(x1-x2))*c*euclidean(point1, point2)
     return distance
     
 def adj(rock, point, visit):
     x, y, z = point
-    list = [(x+1, y, z), (x-1, y, z), (x, y+1, z), (x, y-1, z), (x, y, z+1), (x, y, z-1), (x+1, y+1, z), (x-1, y+1, z), (x+1, y-1, z), (x+1, y, z+1), (x+1, y, z-1), 
-            (x, y+1, z+1), (x, y+1, z-1)]
+    list = [(x+1, y, z), (x-1, y, z), (x, y+1, z), (x, y-1, z), (x, y, z+1), (x, y, z-1)]
     list = filter(lambda (x, y, z): (x in range(rock.shape[0]) and y in range(rock.shape[1]) and z in range(rock.shape[2]) and not (x, y, z) in visit), list)
     return list
 
 def rock_AStar(rock, start, end, distance, h, adj):
     PQ = Queue.PriorityQueue()    
-    PQ.put((h(start), 0, start, []))
-    visited = [start]
+    for x in start:
+        PQ.put((h(x), 0, x, []))
+    visited = start
     while(not PQ.empty()):
         (heu, d, rover, path) = PQ.get()
         n = adj(rock, rover, visited)
         visited = visited + n.keys()
-        if(rover == end):
+        if(rover in end):
             break
         for point in n:
             newd = d + distance(rover, point)
             PQ.put((newd + h(point), newd, point, path + [rover]))
-    if(rover != end):
+    if(not rover in end):
         print("Couldn't find end")
         return []
     else:
@@ -474,6 +498,61 @@ def clusterh(centers, means, c):
         total = total * c
         return -total
     return heuristic
+    
+def find_values():
+    #Replace the file name with the location of the picture
+    #When you generate the picture, crop out the velocity bar and make it a seperate picture.  
+    a = Image.open(r"C:\MyWork\Summer\Kaushik2016\velocity bar.png")
+    b = Image.open(r"C:\MyWork\Summer\Kaushik2016\velocity picture.png")
+    bar = np.array(a)
+    pic = np.array(b)
+    print pic.shape
+    ret = np.zeros((pic.shape[0], pic.shape[1], 1))
+    for x in range(pic.shape[0]):
+        for y in range(pic.shape[1]):
+            (r, g, bl) = (pic[x][y][0], pic[x][y][1], pic[x][y][2])
+            for x2 in range(bar.shape[0]):
+                for y2 in range(bar.shape[1]):
+                    if(abs(bar[x2][y2][0] - r) + abs(bar[x2][y2][1] - g) + abs(bar[x2][y2][2] - bl) < 5):
+                        ret[x][y][0] = x2
+                        break
+    return ret
+    
+def comparison(array, visited):
+    total = 0
+    for (x, y, z) in visited:
+        total += array[x][y][z]
+    total = total/len(visited)
+    return total
+    
+start = []
+for i in range(292):
+    start = start + [(i, 0, 0)]
+
+end = []
+for i in range(292):
+    end = end + [(i, 382, 0)]
+
+#Pass in the array from find_values, or take out the commented line below
+def test(array):
+    #array = find_values()
+    rock = read_coloredslice(r"C:\MyWork\Summer\Kaushik2016\Picture\pic3.tif")
+    rock2 = crop(rock, array.shape)
+    p = []
+    v = []
+    best = 0
+    for i in range(50):
+        print 123456, i
+        for j in range(3):
+            print (j+1)/4.0
+            d, path, visited = rock_AStar(rock2, start, end, metric3(rock2, 4*(i+1)), sampleh((145, 0, 0), (145, 382, 0)), adj2)
+            c = comparison(array, visited)
+            if(c > best):
+                best = c
+                v = visited
+                p = path
+    return v
+    
 
 ###########################################
 ##Code to make D-RNG.  
